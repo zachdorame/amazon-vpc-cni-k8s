@@ -226,7 +226,7 @@ Type: Integer as a String
 
 Default: 9001
 
-Used to configure the MTU size for attached ENIs. The valid range is from `576` to `9001`.
+Used to configure the MTU size for attached ENIs. The valid range for IPv4 is from `576` to `9001`, while the valid range for IPv6 is from `1280` to `9001`.
 
 #### `AWS_VPC_K8S_CNI_EXTERNALSNAT`
 
@@ -266,6 +266,15 @@ Default: empty
 
 Specify a comma-separated list of IPv4 CIDRs to exclude from SNAT. For every item in the list an `iptables` rule and off\-VPC
 IP rule will be applied. If an item is not a valid ipv4 range it will be skipped. This should be used when `AWS_VPC_K8S_CNI_EXTERNALSNAT=false`.
+
+#### `POD_MTU` (v1.16.4+)
+
+Type: Integer as a String
+
+*Note*: If unset, the default value is derived from `AWS_VPC_ENI_MTU`, which defaults to `9001`.
+Default: 9001
+
+Used to configure the MTU size for pod virtual interfaces. The valid range for IPv4 is from `576` to `9001`, while the valid range for IPv6 is from `1280` to `9001`.
 
 #### `WARM_ENI_TARGET`
 
@@ -536,6 +545,15 @@ You can use the below command to enable `DISABLE_TCP_EARLY_DEMUX` to `true` -
 kubectl patch daemonset aws-node -n kube-system -p '{"spec": {"template": {"spec": {"initContainers": [{"env":[{"name":"DISABLE_TCP_EARLY_DEMUX","value":"true"}],"name":"aws-vpc-cni-init"}]}}}}'
 ```
 
+#### `ENABLE_SUBNET_DISCOVERY` (v1.18.0+)
+
+Type: Boolean as a String
+
+Default: `true`
+
+Subnet discovery is enabled by default. VPC-CNI will pick the subnet with the most number of free IPs from the nodes' VPC/AZ to create the secondary ENIs. The subnets considered are the subnet the node is created in and subnets tagged with `kubernetes.io/role/cni`.
+If `ENABLE_SUBNET_DISCOVERY` is set to `false` or if DescribeSubnets fails due to IAM permissions, all secondary ENIs will be created in the subnet the node is created in.
+
 #### `ENABLE_PREFIX_DELEGATION` (v1.9.0+)
 
 Type: Boolean as a String
@@ -589,7 +607,7 @@ Setting `ANNOTATE_POD_IP` to `true` will allow IPAMD to add an annotation `vpc.a
 
 There is a known [issue](https://github.com/kubernetes/kubernetes/issues/39113) with kubelet taking time to update `Pod.Status.PodIP` leading to calico being blocked on programming the policy. Setting `ANNOTATE_POD_IP` to `true` will enable AWS VPC CNI plugin to add Pod IP as an annotation to the pod spec to address this race condition.
 
-To annotate the pod with pod IP, you will have to add "patch" permission for pods resource in aws-node clusterrole. You can use the below command -
+To annotate the pod with pod IP, you will have to add `patch` permission for pods resource in aws-node clusterrole. You can use the below command -
 
 ```
 cat << EOF > append.yaml
@@ -605,6 +623,8 @@ EOF
 ```
 kubectl apply -f <(cat <(kubectl get clusterrole aws-node -o yaml) append.yaml)
 ```
+
+NOTE: Adding `patch` permissions to the `aws-node` Daemonset increases the security scope for the plugin, so add this permission only after performing a proper security assessment of the tradeoffs.
 
 #### `ENABLE_IPv4` (v1.10.0+)
 
@@ -709,6 +729,15 @@ Container runtimes such as `containerd` will enable IPv6 in newly created contai
 
 Note that if you set this while using Multus, you must ensure that any chained plugins do not depend on IPv6 networking. You must also ensure that chained plugins do not also modify these sysctls.
 
+
+#### `NETWORK_POLICY_ENFORCING_MODE` (v1.17.1+)
+
+Type: String
+
+Default: `standard`
+
+Network Policy agent now supports two modes for Network Policy enforcement - Strict and Standard. By default, the Amazon VPC CNI plugin for Kubernetes configures network policies for pods in parallel with the pod provisioning. In the `standard` mode, until all of the policies are configured for the new pod, containers in the new pod will start with a default allow policy. A default allow policy means that all ingress and egress traffic is allowed to and from the new pods. However, in the `strict` mode, a new pod will be blocked from Egress and Ingress connections till a qualifying Network Policy is applied. In Strict Mode, you must have a network policy defined for every pod in your cluster. Host Networking pods are exempted from this requirement.
+
 ### VPC CNI Feature Matrix
 
 
@@ -722,6 +751,7 @@ Note that if you set this while using Multus, you must ensure that any chained p
 This plugin interacts with the following tags on ENIs:
 
 * `cluster.k8s.amazonaws.com/name`
+* `kubernetes.io/role/cni`
 * `node.k8s.amazonaws.com/instance_id`
 * `node.k8s.amazonaws.com/no_manage`
 
@@ -729,6 +759,17 @@ This plugin interacts with the following tags on ENIs:
 
 The tag `cluster.k8s.amazonaws.com/name` will be set to the cluster name of the
 aws-node daemonset which created the ENI.
+
+#### CNI role tag
+
+The tag `kubernetes.io/role/cni` is read by the aws-node daemonset to determine
+if a secondary subnet can be used for creating secondary ENIs.
+
+This tag is not set by the cni plugin itself, but rather must be set by a user
+to indicate that a subnet can be used for secondary ENIs. Secondary subnets
+to be used must have this tag. The primary subnet (node's subnet) is not
+required to be tagged.
+
 
 #### Instance ID tag
 

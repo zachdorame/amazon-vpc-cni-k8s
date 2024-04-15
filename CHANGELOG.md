@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.17.1
+
+* Feature - [Send pod name/ns to nodeagent for strict mode](https://github.com/aws/amazon-vpc-cni-k8s/pull/2790) (@jayanthvn)
+* Feature - [gRPC call for networkpolicy agent](https://github.com/aws/amazon-vpc-cni-k8s/pull/2785)(@jayanthvn)
+* Improvement - [Bump golang.org/x/sys from 0.16.0 to 0.17.0 in /test/agent](https://github.com/aws/amazon-vpc-cni-k8s/pull/2822) (@dependabot)
+* Improvement - [Bump google.golang.org/grpc from 1.61.0 to 1.62.0](https://github.com/aws/amazon-vpc-cni-k8s/pull/2827) (@dependabot)
+* Improvement - [Bump google.golang.org/grpc from 1.61.0 to 1.62.0](https://github.com/aws/amazon-vpc-cni-k8s/pull/2827) (@dependabot)
+* Improvement - [Bump github.com/aws/aws-sdk-go from 1.49.13 to 1.50.29](https://github.com/aws/amazon-vpc-cni-k8s/pull/2826) (@dependabot)
+* Improvement - [Bump k8s.io/apimachinery from 0.29.0 to 0.29.2](https://github.com/aws/amazon-vpc-cni-k8s/pull/2825) (@dependabot)
+* Improvement - [make generate; make generate-limits; remove soak tests](https://github.com/aws/amazon-vpc-cni-k8s/pull/2819) (@dependabot)
+* Improvement - [Bump github.com/prometheus/client_golang from 1.18.0 to 1.19.0](https://github.com/aws/amazon-vpc-cni-k8s/pull/2824) (@dependabot)
+* Improvement - [Make vpc cni as master CNI in multus-daemonset-thick.yml](https://github.com/aws/amazon-vpc-cni-k8s/pull/2828) (@raghs-aws)
+* Improvement - [Bump github.com/prometheus/client_model from 0.5.0 to 0.6.0](https://github.com/aws/amazon-vpc-cni-k8s/pull/2829) (@dependabot)
+* Improvement - [Repo controlled build go version](https://github.com/aws/amazon-vpc-cni-k8s/pull/2831) (@xdu31)
+
+## v1.16.4
+
+* Bug - [Revert #2744 to prevent livelock when attempting to increase datastore pool](https://github.com/aws/amazon-vpc-cni-k8s/pull/2810) (@jdn5126 )
+* Bug - [Do not allocate IPs or prefixes to trunk ENIs; enable Custom Networking before Security Groups for Pods](https://github.com/aws/amazon-vpc-cni-k8s/pull/2801) (@jdn5126 )
+* Bug - [Ignore non-zero cards](https://github.com/aws/amazon-vpc-cni-k8s/pull/2784) (@jchen6585 )
+* Documentation - [Added description to list of metrics reported by cni-metrics-helper](https://github.com/aws/amazon-vpc-cni-k8s/pull/2786) (@zachdorame )
+* Enhancement - [Bump helm.sh/helm/v3 from 3.14.1 to 3.14.2](https://github.com/aws/amazon-vpc-cni-k8s/pull/2806) (@dependabot )
+* Enhancement - [Add validation for MTU, update ANNOTATE_POD_IP README](https://github.com/aws/amazon-vpc-cni-k8s/pull/2798) (@jdn5126 )
+* Enhancement - [Update Golang version to 1.21.7; update aws-vpc-cni chart README](https://github.com/aws/amazon-vpc-cni-k8s/pull/2795) (@jdn5126 )
+* Enhancement - [Bump helm.sh/helm/v3 from 3.14.0 to 3.14.1](https://github.com/aws/amazon-vpc-cni-k8s/pull/2794) (@jdn5126 )
+* Feature - [Pod MTU](https://github.com/aws/amazon-vpc-cni-k8s/pull/2791) (@jchen6585 )
+
+## v1.16.3
+
+* Dependency - [Dependabot updates](https://github.com/aws/amazon-vpc-cni-k8s/pull/2775) (@jdn5126 )
+* Dependency - [Upgrade Golang version to 1.21.6](https://github.com/aws/amazon-vpc-cni-k8s/pull/2755) (@jdn5126 )
+* Improvement - [Enable ENABLE_V6_EGRESS on Clusters with Mixed IPv6/IPv4 Subnets](https://github.com/aws/amazon-vpc-cni-k8s/pull/2754) (@sergeylanzman )
+* Improvement - [cni-metrics-helper add podAnnotation value](https://github.com/aws/amazon-vpc-cni-k8s/pull/2748) (@prysmakou )
+* Improvement - [Track max pods, simplify warm IP pool management](https://github.com/aws/amazon-vpc-cni-k8s/pull/2745) (@jdn5126 )
+* Improvement - [Faster eni scaleup](https://github.com/aws/amazon-vpc-cni-k8s/pull/2744) (@jchen6585 )
+
 ## v1.16.2
 
 * Bug - [Refactor IPTable Rules](https://github.com/aws/amazon-vpc-cni-k8s/pull/2697) (@jchen6585 )
@@ -7,7 +43,7 @@
 * Dependency - [revert CNI spec to 0.4.0](https://github.com/aws/amazon-vpc-cni-k8s/pull/2757) (@jdn5126 )
 * Dependency - [update crypto to patch CVE-2023-48795](https://github.com/aws/amazon-vpc-cni-k8s/pull/2740) (@haouc )
 * Dependency - [Dependabot updates: aws-sdk-go, containernetworking/plugins, go-logr, grpc, k8s.io/cli-runtime](https://github.com/aws/amazon-vpc-cni-k8s/pull/2738) (@jdn5126 )
-* Enhancement - [Iptables mock](https://github.com/aws/amazon-vpc-cni-k8s/pull/2721) (@jchen6585 )
+* Improvement - [Iptables mock](https://github.com/aws/amazon-vpc-cni-k8s/pull/2721) (@jchen6585 )
 
 ## v1.16.0
 

@@ -118,6 +118,9 @@ const (
 	// This environment variable specifies whether IPAMD should allocate or deallocate ENIs on a non-schedulable node (default false).
 	envManageENIsNonSchedulable = "AWS_MANAGE_ENIS_NON_SCHEDULABLE"
 
+	// This environment is used to specify whether we should use enhanced subnet selection or not when creating ENIs (default true).
+	envSubnetDiscovery = "ENABLE_SUBNET_DISCOVERY"
+
 	// eniNoManageTagKey is the tag that may be set on an ENI to indicate ipamd
 	// should not manage it in any form.
 	eniNoManageTagKey = "node.k8s.amazonaws.com/no_manage"
@@ -176,6 +179,10 @@ const (
 	// aws error codes for insufficient IP address scenario
 	INSUFFICIENT_CIDR_BLOCKS    = "InsufficientCidrBlocks"
 	INSUFFICIENT_FREE_IP_SUBNET = "InsufficientFreeAddressesInSubnet"
+
+	// envEnableNetworkPolicy is used to enable IPAMD/CNI to send pod create events to network policy agent.
+	envNetworkPolicyMode     = "NETWORK_POLICY_ENFORCING_MODE"
+	defaultNetworkPolicyMode = "standard"
 )
 
 var log = logger.Get()
@@ -193,18 +200,21 @@ type IPAMContext struct {
 	enableIPv6                bool
 	useCustomNetworking       bool
 	manageENIsNonScheduleable bool
+	useSubnetDiscovery        bool
 	networkClient             networkutils.NetworkAPIs
 	maxIPsPerENI              int
 	maxENI                    int
 	maxPrefixesPerENI         int
 	unmanagedENI              int
-	warmENITarget             int
-	warmIPTarget              int
-	minimumIPTarget           int
-	warmPrefixTarget          int
-	primaryIP                 map[string]string // primaryIP is a map from ENI ID to primary IP of that ENI
-	lastNodeIPPoolAction      time.Time
-	lastDecreaseIPPool        time.Time
+	numNetworkCards           int
+
+	warmENITarget        int
+	warmIPTarget         int
+	minimumIPTarget      int
+	warmPrefixTarget     int
+	primaryIP            map[string]string // primaryIP is a map from ENI ID to primary IP of that ENI
+	lastNodeIPPoolAction time.Time
+	lastDecreaseIPPool   time.Time
 	// reconcileCooldownCache keeps timestamps of the last time an IP address was unassigned from an ENI,
 	// so that we don't reconcile and add it back too quickly if IMDS lags behind reality.
 	reconcileCooldownCache    ReconcileCooldownCache
@@ -217,6 +227,7 @@ type IPAMContext struct {
 	enableManageUntaggedMode  bool
 	enablePodIPAnnotation     bool
 	maxPods                   int // maximum number of pods that can be scheduled on the node
+	networkPolicyMode         string
 }
 
 // setUnmanagedENIs will rebuild the set of ENI IDs for ENIs tagged as "no_manage"
@@ -326,11 +337,12 @@ func New(k8sClient client.Client) (*IPAMContext, error) {
 	c.networkClient = networkutils.New()
 	c.useCustomNetworking = UseCustomNetworkCfg()
 	c.manageENIsNonScheduleable = ManageENIsOnNonSchedulableNode()
+	c.useSubnetDiscovery = UseSubnetDiscovery()
 	c.enablePrefixDelegation = usePrefixDelegation()
 	c.enableIPv4 = isIPv4Enabled()
 	c.enableIPv6 = isIPv6Enabled()
 	c.disableENIProvisioning = disableENIProvisioning()
-	client, err := awsutils.New(c.useCustomNetworking, disableLeakedENICleanup(), c.enableIPv4, c.enableIPv6)
+	client, err := awsutils.New(c.useSubnetDiscovery, c.useCustomNetworking, disableLeakedENICleanup(), c.enableIPv4, c.enableIPv6)
 	if err != nil {
 		return nil, errors.Wrap(err, "ipamd: can not initialize with AWS SDK interface")
 	}
@@ -346,6 +358,12 @@ func New(k8sClient client.Client) (*IPAMContext, error) {
 	c.enablePodENI = enablePodENI()
 	c.enableManageUntaggedMode = enableManageUntaggedMode()
 	c.enablePodIPAnnotation = enablePodIPAnnotation()
+	c.numNetworkCards = len(c.awsClient.GetNetworkCards())
+
+	c.networkPolicyMode, err = getNetworkPolicyMode()
+	if err != nil {
+		return nil, err
+	}
 
 	err = c.awsClient.FetchInstanceTypeLimits()
 	if err != nil {
@@ -408,7 +426,7 @@ func (c *IPAMContext) nodeInit() error {
 	}
 
 	log.Debugf("DescribeAllENIs success: ENIs: %d, tagged: %d", len(metadataResult.ENIMetadata), len(metadataResult.TagMap))
-	c.awsClient.SetCNIUnmanagedENIs(metadataResult.MultiCardENIIDs)
+	c.awsClient.SetMultiCardENIs(metadataResult.MultiCardENIIDs)
 	c.setUnmanagedENIs(metadataResult.TagMap)
 	enis := c.filterUnmanagedENIs(metadataResult.ENIMetadata)
 
@@ -452,12 +470,12 @@ func (c *IPAMContext) nodeInit() error {
 		return err
 	}
 
-	if c.enablePodENI {
-		// Try to patch CNINode with Security Groups for Pods feature.
-		c.tryEnableSecurityGroupsForPods(ctx)
-	}
-
 	if c.enableIPv6 {
+		// Security Groups for Pods cannot be enabled for IPv4 at this point, as Custom Networking must be enabled first.
+		if c.enablePodENI {
+			// Try to patch CNINode with Security Groups for Pods feature.
+			c.tryEnableSecurityGroupsForPods(ctx)
+		}
 		// We will not support upgrading/converting an existing IPv4 cluster to operate in IPv6 mode. So, we will always
 		// start with a clean slate in IPv6 mode. We also do not have to deal with dynamic update of Prefix Delegation
 		// feature in IPv6 mode as we do not support (yet) a non-PD v6 option. In addition, we do not support custom
@@ -535,6 +553,11 @@ func (c *IPAMContext) nodeInit() error {
 		} else {
 			log.Errorf("No ENIConfig could be found for this node", err)
 		}
+	}
+
+	// Now that Custom Networking is (potentially) enabled, Security Groups for Pods can be enabled for IPv4 nodes.
+	if c.enablePodENI {
+		c.tryEnableSecurityGroupsForPods(ctx)
 	}
 
 	// On node init, check if datastore pool needs to be increased. If so, attach CIDRs from existing ENIs and attach new ENIs.
@@ -652,11 +675,7 @@ func (c *IPAMContext) updateIPPoolIfRequired(ctx context.Context) {
 	log.Debugf("IP stats - total IPs: %d, assigned IPs: %d, cooldown IPs: %d", stats.TotalIPs, stats.AssignedIPs, stats.CooldownIPs)
 
 	if datastorePoolTooLow {
-		// Allow for rapid scale up to decrease time it takes for pod to retrieve an ip
-		// but conservative scale down to account for pod churn
-		for datastorePoolStillTooLow := datastorePoolTooLow; datastorePoolStillTooLow; datastorePoolStillTooLow, _ = c.isDatastorePoolTooLow() {
-			c.increaseDatastorePool(ctx)
-		}
+		c.increaseDatastorePool(ctx)
 	} else if c.isDatastorePoolTooHigh(stats) {
 		c.decreaseDatastorePool(decreaseIPPoolInterval)
 	}
@@ -823,7 +842,7 @@ func (c *IPAMContext) updateLastNodeIPPoolAction() {
 
 func (c *IPAMContext) tryAllocateENI(ctx context.Context) error {
 	var securityGroups []*string
-	var subnet string
+	var eniCfgSubnet string
 
 	if c.useCustomNetworking {
 		eniCfg, err := eniconfig.MyENIConfig(ctx, c.k8sClient)
@@ -837,12 +856,12 @@ func (c *IPAMContext) tryAllocateENI(ctx context.Context) error {
 			log.Debugf("Found security-group id: %s", sgID)
 			securityGroups = append(securityGroups, aws.String(sgID))
 		}
-		subnet = eniCfg.Subnet
+		eniCfgSubnet = eniCfg.Subnet
 	}
 
 	resourcesToAllocate := c.GetENIResourcesToAllocate()
 	if resourcesToAllocate > 0 {
-		eni, err := c.awsClient.AllocENI(c.useCustomNetworking, securityGroups, subnet, resourcesToAllocate)
+		eni, err := c.awsClient.AllocENI(c.useCustomNetworking, securityGroups, eniCfgSubnet, resourcesToAllocate)
 		if err != nil {
 			log.Errorf("Failed to increase pool size due to not able to allocate ENI %v", err)
 			ipamdErrInc("increaseIPPoolAllocENI")
@@ -1359,7 +1378,7 @@ func (c *IPAMContext) nodeIPPoolReconcile(ctx context.Context, interval time.Dur
 		efaENIs = metadataResult.EFAENIs
 		eniTagMap = metadataResult.TagMap
 		c.setUnmanagedENIs(metadataResult.TagMap)
-		c.awsClient.SetCNIUnmanagedENIs(metadataResult.MultiCardENIIDs)
+		c.awsClient.SetMultiCardENIs(metadataResult.MultiCardENIIDs)
 		attachedENIs = c.filterUnmanagedENIs(metadataResult.ENIMetadata)
 	}
 
@@ -1667,6 +1686,11 @@ func ManageENIsOnNonSchedulableNode() bool {
 	return parseBoolEnvVar(envManageENIsNonSchedulable, false)
 }
 
+// UseSubnetDiscovery returns whether we should use enhanced subnet selection or not when creating ENIs.
+func UseSubnetDiscovery() bool {
+	return parseBoolEnvVar(envSubnetDiscovery, true)
+}
+
 func parseBoolEnvVar(envVariableName string, defaultVal bool) bool {
 	if strValue := os.Getenv(envVariableName); strValue != "" {
 		parsedValue, err := strconv.ParseBool(strValue)
@@ -1731,6 +1755,16 @@ func enablePodENI() bool {
 	return utils.GetBoolAsStringEnvVar(envEnablePodENI, false)
 }
 
+func getNetworkPolicyMode() (string, error) {
+	if value := os.Getenv(envNetworkPolicyMode); value != "" {
+		if utils.IsValidNetworkPolicyEnforcingMode(value) {
+			return value, nil
+		}
+		return "", errors.New("invalid Network policy mode, supported modes: none, strict, standard")
+	}
+	return defaultNetworkPolicyMode, nil
+}
+
 func usePrefixDelegation() bool {
 	return utils.GetBoolAsStringEnvVar(envEnableIpv4PrefixDelegation, false)
 }
@@ -1768,9 +1802,8 @@ func (c *IPAMContext) filterUnmanagedENIs(enis []awsutils.ENIMetadata) []awsutil
 			log.Debugf("Skipping ENI %s: since it is unmanaged", eni.ENIID)
 			numFiltered++
 			continue
-		} else if c.awsClient.IsCNIUnmanagedENI(eni.ENIID) {
+		} else if c.awsClient.IsMultiCardENI(eni.ENIID) {
 			log.Debugf("Skipping ENI %s: since on non-zero network card", eni.ENIID)
-			numFiltered++
 			continue
 		}
 		ret = append(ret, eni)
@@ -1887,6 +1920,7 @@ func GetConfigForDebug() map[string]interface{} {
 		envWarmENITarget:            getWarmENITarget(),
 		envCustomNetworkCfg:         UseCustomNetworkCfg(),
 		envManageENIsNonSchedulable: ManageENIsOnNonSchedulableNode(),
+		envSubnetDiscovery:          UseSubnetDiscovery(),
 	}
 }
 
